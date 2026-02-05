@@ -3,32 +3,54 @@ name: Docker Image CI
 on:
   push:
     branches: [ master ]
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
 
-    steps:
-    #- uses: actions/checkout@v2
-    #- name: Build the Docker image dotnet 5.0 + node 16
-    #  run: |
-    #    echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin docker.io
-    #    docker build . --file "5.0-16-Dockerfile" --tag docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ secrets.DOCKER_HUB_REPOSITORY }}:5-16
-    #    docker push docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ secrets.DOCKER_HUB_REPOSITORY }}:5-16
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dockerfile: 5.0-16-Dockerfile
+            tag: 5-16
+          - dockerfile: 6.0-17-Dockerfile
+            tag: 6-17
+          - dockerfile: 7.0-19-Dockerfile
+            tag: 7-19
+            latest: true
 
-    #- uses: actions/checkout@v2
-    #- name: Build the Docker image latest dotnet 6 + node 17
-    #  run: |
-    #    echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin docker.io
-    #    docker build . --file "6.0-17-Dockerfile" --tag docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ secrets.DOCKER_HUB_REPOSITORY }}:6-17
-    #    docker push docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ secrets.DOCKER_HUB_REPOSITORY }}:6-17
-        
-    - uses: actions/checkout@v2
-    - name: Build the Docker image latest dotnet 7 + node 19
-      run: |
-        echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin docker.io
-        docker build . --file "7.0-19-Dockerfile" --tag docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ secrets.DOCKER_HUB_REPOSITORY }}:7-19 --tag docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ secrets.DOCKER_HUB_REPOSITORY }}:latest
-        docker push docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ secrets.DOCKER_HUB_REPOSITORY }}:latest
-        docker push docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ secrets.DOCKER_HUB_REPOSITORY }}:7-19
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (no push)
+        run: docker build . --file "${{ matrix.dockerfile }}" --tag "local/${{ github.repository }}:${{ matrix.tag }}"
+
+      # Only publish when running on upstream repo (not forks) and only on push.
+      - name: Login to Docker Hub
+        if: github.event_name == 'push' && github.repository == 'evilz/dotnet-node-docker'
+        run: echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin docker.io
+
+      - name: Build & push
+        if: github.event_name == 'push' && github.repository == 'evilz/dotnet-node-docker'
+        env:
+          IMAGE: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/${{ secrets.DOCKER_HUB_REPOSITORY }}
+        run: |
+          tags=("${IMAGE}:${{ matrix.tag }}")
+          if [ "${{ matrix.latest || false }}" = "true" ]; then
+            tags+=("${IMAGE}:latest")
+          fi
+
+          build_args=()
+          for t in "${tags[@]}"; do
+            build_args+=(--tag "$t")
+          done
+
+          docker build . --file "${{ matrix.dockerfile }}" "${build_args[@]}"
+          for t in "${tags[@]}"; do
+            docker push "$t"
+          done
